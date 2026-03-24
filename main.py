@@ -97,9 +97,6 @@ class Implied_Volatility:
             # print(vega)
 
             if vega < tol:
-                # print(
-                #     f"Vega is too small to continue, implied volatility was not found."
-                # )
                 return None
 
             sigma = sigma - error / vega
@@ -292,10 +289,6 @@ def main(ticker: str):
             data_points["strike"].append(strike_price)
             data_points["time_to_expiry"].append(time_to_expiry)
             data_points["implied_volatility"].append(iv)
-
-            # print(
-            #     f"actual price {actual_price}, stock price {stock_price}, strike price {strike_price}, time to expiry {time_to_expiry}, iv {iv}, predicted price {predicted_price}"
-            # )
     utils.plot_3d_surface(data_points, ticker)
     return
 
