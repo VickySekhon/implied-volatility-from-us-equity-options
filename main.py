@@ -1,5 +1,5 @@
-import yfinance
-import math
+import yfinance as yf
+import math, os
 import numpy as np
 import pandas as pd
 from scipy.stats import norm
@@ -145,3 +145,35 @@ fake_market_price = IV.black_scholes(0.2, S, K, T)
 iv = IV.newton_raphson(fake_market_price, S, K, T)
 print(f"Original market price: ${fake_market_price:.2f} calculated at 0.2 volatility.")
 print(f"Recovered IV: {iv}")
+
+
+
+class Options_Data:
+    def __init__(self):
+        self.yf_obj = yf
+        self.df = None
+        
+    def download_data(self, tickers: list[str], **kwargs) -> None:
+        df = self.yf_obj.download(tickers, **kwargs)
+        self._set_data(df)
+        
+        destination_dir = os.path.join(os.curdir, "data")
+        file_name = os.path.join(destination_dir, f"options_data.csv")
+        
+        os.makedirs(destination_dir, exist_ok=True)
+        df.to_csv(file_name)
+        
+    def _set_data(self, df):
+        self.df = df
+        
+aapl = yf.Ticker("aapl")  
+print(aapl)
+# aapl_history = aapl.history(period="5d", interval="1h")
+# print(len(aapl_history))
+
+#data = yf.download()
+
+data = Options_Data()
+data.download_data("AAPL", period="5d", interval="1h")
+print(data.df.head())
+print(data.df.tail())
