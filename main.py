@@ -9,6 +9,7 @@ from scipy.interpolate import griddata
 
 print("PICTON Investments Case Study By: Vicky Sekhon")
 
+
 class Implied_Volatility:
     THREE_MONTH_T_BILL_RATE = 0.037149999999999996
 
@@ -93,19 +94,21 @@ class Implied_Volatility:
                 return sigma, predicted_price
 
             vega = self._vega(sigma, stock_price, strike_price, time_to_expiry)
-            print(vega)
+            # print(vega)
 
             if vega < tol:
-                print(
-                    f"Vega is too small to continue, implied volatility was not found."
-                )
+                # print(
+                #     f"Vega is too small to continue, implied volatility was not found."
+                # )
                 return None
 
-            sigma = sigma - error / vega      
-            sigma = max(1e-6, min(sigma, 10.0))  # clamp between ~0% and 1000% vol
+            sigma = sigma - error / vega
+            # Clamp volatility so it is non-negative
+            sigma = max(1e-6, min(sigma, 10.0))
 
         print(f"Reached end of maximum iterations, implied volatility was not found.")
         return None
+
 
 class Options_Data:
     def __init__(self):
@@ -116,12 +119,12 @@ class Options_Data:
 
     def load_data(self, tickers: str, expiry_date=None) -> None:
         ticker_df = self.yf_obj.Ticker(tickers)
-        
+
         if expiry_date:
-          option_df = ticker_df.option_chain(date=expiry_date)
+            option_df = ticker_df.option_chain(date=expiry_date)
         else:
-          option_df = ticker_df.option_chain()
-          
+            option_df = ticker_df.option_chain()
+
         option_df = ticker_df.option_chain(date=expiry_date)
         self._set_ticker_df(ticker_df)
         self._set_option_df(option_df)
@@ -146,6 +149,15 @@ class Options_Data:
         os.makedirs(destination_dir, exist_ok=True)
         history_df.to_csv(file_name)
 
+    def get_stock_price(self):
+        return self.ticker_df.history(period="1d")["Close"].iloc[-1]
+
+    def get_option_expiries(self):
+        return self.ticker_df.options
+
+    def get_option_chain(self, expiry: str):
+        return self.ticker_df.option_chain(expiry)
+
     def _set_option_df(self, option_df):
         self.options = option_df
 
@@ -154,129 +166,141 @@ class Options_Data:
 
     def _set_ticker_history(self, history_df):
         self.ticker_history_df = history_df
-        
-        
-"""
-goal is given prices of options, determine the implied volatility (future volatility)
 
-black scholes takes in volatility and prices an option
 
-numerical root-finding
-for an option, we can use black schloes to guess the volatility by repeatedly subbing in a random volatility until the options price is output
-- plug in vol -> output is too low, guess higher vol 
-- plug in vol -> output is too high, guess lower vol 
+class Utils:
+    UPPER_STRIKE_PRICE = 1.05
+    LOWER_STRIKE_PRICE = 0.80
 
-Volatility surface is a map of fear: Z = fear (IV), X = when expiry date is X, Y = where strike price is Y
-volatility surface trends:
-- Vol skew: OTM puts are bought a lot since they have a low premium and hedge managers use them to protect against potentially huge crashes
-- the red is near-term, OTM puts, which are extremely inexpensive
-- Blue trough: ATM short-term calls have a higher premium and a lower IV because there is less uncertainty about them expiring OTM or near it
-- jagged red IV that smooths out over time shows that short-dated options are more sensitive to fear than long-dated ones
-- price of underlying = ATM = vol minimum = blue trough in this graph
+    def __init__(self):
+        return
 
-the more volatile an option is, the more incentivized buyers are to purchase it since it could be profitable. If it isn't, then the max a buyer loses is their option premium. 
+    """
+    Filtration pipeline that removes outliers from data before generating 
+    volatility surface. The goal is to get the volatility surface to be smooth.
+    
+    1. Remove illiquid assets (done before this function)
+    2. Filter for realistic strikes that are within 20% of stock price
+    3. Filter options that are not heavily traded since they have an unreliable price 
+    4. Filter options with very low premiums
+    5. Filter options that nobody is holding
+    6. Filter options that are expiring within next 2 weeks since they will have a high implied volatility
+    """
 
-price of underlying moves more -> higher volatility -> higher option premium -> higher implied volatility
+    def skip_row(
+        self,
+        row: pd.Series,
+        actual_price: float,
+        stock_price: float,
+        strike_price: float,
+        time_to_expiry: int,
+    ) -> bool:
+        lower = stock_price * self.LOWER_STRIKE_PRICE
+        upper = stock_price * self.UPPER_STRIKE_PRICE
 
-IV is what the market expects moving forward (market is going to move -> higher volatility moving forward -> options are priced higher)
+        if strike_price < lower or strike_price > upper:
+            return True
 
-The volatility surface is a function of strike, K, and time-to-maturity, 
-T, and is defined implicitly as: C(S, K, T) := BS (S, T, r, q, K, σ(K, T))    
- 
-C(S, K, T) denotes the current market price of a call option with time-to-maturity T and strike K
+        if row["volume"] < 10:
+            return True
 
-"""
+        if actual_price < 0.05:
+            return True
 
-def main():
+        if row["openInterest"] < 100:
+            return True
+
+        if time_to_expiry < (14 / 365):
+            return True
+
+        return False
+
+    def get_average_price(self, ask, bid):
+        return (ask + bid) / 2
+
+    def plot_3d_surface(self, data_points, ticker):
+        strikes = np.array(data_points["strike"])
+        times = np.array(data_points["time_to_expiry"])
+        ivs = np.array(data_points["implied_volatility"])
+
+        strike_grid = np.linspace(strikes.min(), strikes.max(), 50)
+        time_grid = np.linspace(times.min(), times.max(), 50)
+        S_grid, T_grid = np.meshgrid(strike_grid, time_grid)
+
+        IV_grid = griddata((strikes, times), ivs, (S_grid, T_grid), method="linear")
+
+        fig = plt.figure(figsize=(12, 8))
+        ax = fig.add_subplot(111, projection="3d")
+        ax.plot_surface(S_grid, T_grid, IV_grid, cmap="RdYlGn_r")
+        ax.set_xlabel("Strike")
+        ax.set_ylabel("Time to Expiry")
+        ax.set_zlabel("Implied Volatility")
+        ax.set_title(f"{ticker} Implied Volatility Surface")
+        Utils().save_figure(ticker, plt)
+
+    def save_figure(self, ticker, plt):
+        destination_dir = os.path.join(os.curdir, "surfaces")
+        file_name = os.path.join(destination_dir, f"{ticker}.png")
+        os.makedirs(destination_dir, exist_ok=True)
+        plt.savefig(file_name, dpi=150, bbox_inches="tight")
+
+
+def main(ticker: str):
     data = Options_Data()
     IV = Implied_Volatility()
+    utils = Utils()
 
-    expiry = date(2026, 3, 27)
-    today = date.today()
-    time_to_expiry = (expiry - today).days / 365
+    data.load_data(ticker)
+    stock_price = data.get_stock_price()
 
-    data.load_data("AAPL")
-    stock_price = data.ticker_df.history(period="1d")["Close"].iloc[-1]
+    data_points = {"strike": [], "implied_volatility": [], "time_to_expiry": []}
 
-
-    plot = {"strike": [], "implied_volatility": [], "time_to_expiry": []}
-
-    for expiry_str in data.ticker_df.options:
+    for expiry_str in data.get_option_expiries():
         expiry = date.fromisoformat(expiry_str)
-        time_to_expiry = (expiry - today).days / 365
+        time_to_expiry = (expiry - date.today()).days / 365
 
         if time_to_expiry <= 0:
             continue
 
-        chain = data.ticker_df.option_chain(expiry_str)
-        calls = chain.calls
-        puts = chain.puts
-        
+        option_chain = data.get_option_chain(expiry_str)
+        calls, puts = option_chain.calls, option_chain.puts
         option_chain_data = pd.concat([calls, puts], ignore_index=True)
-        
         option_chain_data.fillna(0, inplace=True)
 
         for _, row in option_chain_data.iterrows():
+            # Do not process illiquid underlying
             if row["bid"] == 0 or row["ask"] == 0:
-                continue  # skip illiquid
+                continue
 
-            actual_price = (row["bid"] + row["ask"]) / 2
+            actual_price = utils.get_average_price(row["bid"], row["ask"])
             strike_price = row["strike"]
-            
-            lower = stock_price * 0.80   # within 20% below spot
-            upper = stock_price * 1.05   # within 20% above spot
 
-            if strike_price < lower or strike_price > upper:
-                continue
-
-            if row["volume"] < 10:
+            skip_row = utils.skip_row(
+                row, actual_price, stock_price, strike_price, time_to_expiry
+            )
+            if skip_row:
                 continue
 
-            if actual_price < 0.05:
-                continue
-              
-            if row["openInterest"] < 100:
-                continue
-              
-            if time_to_expiry < (14/365):
-                continue
-
-            iv = IV.newton_raphson(actual_price, stock_price, strike_price, time_to_expiry)
+            iv = IV.newton_raphson(
+                actual_price, stock_price, strike_price, time_to_expiry
+            )
 
             if iv is None:
                 continue
-              
+
             iv, predicted_price = iv
+            data_points["strike"].append(strike_price)
+            data_points["time_to_expiry"].append(time_to_expiry)
+            data_points["implied_volatility"].append(iv)
 
-            print(f"actual price {actual_price}, stock price {stock_price}, strike price {strike_price}, time to expiry {time_to_expiry}, iv {iv}, predicted price {predicted_price}")
-            plot["strike"].append(strike_price)
-            plot["time_to_expiry"].append(time_to_expiry)
-            plot["implied_volatility"].append(iv)
-
-
-    strikes = np.array(plot["strike"])
-    times = np.array(plot["time_to_expiry"])
-    ivs = np.array(plot["implied_volatility"])
-
-
-    strike_grid = np.linspace(strikes.min(), strikes.max(), 50)
-    time_grid = np.linspace(times.min(), times.max(), 50)
-    S_grid, T_grid = np.meshgrid(strike_grid, time_grid)
-
-  
-    IV_grid = griddata((strikes, times), ivs, (S_grid, T_grid), method="linear")
-    # IV_grid = np.clip(IV_grid, 0.3, 0.45)
-
-
-    fig = plt.figure(figsize=(12, 8))
-    ax = fig.add_subplot(111, projection="3d")
-    ax.plot_surface(S_grid, T_grid, IV_grid, cmap="RdYlGn_r")
-    ax.set_xlabel("Strike")
-    ax.set_ylabel("Time to Expiry (Years)")
-    ax.set_zlabel("Implied Volatility")
-    ax.set_title("AAPL Implied Volatility Surface")
-    plt.show()
+            # print(
+            #     f"actual price {actual_price}, stock price {stock_price}, strike price {strike_price}, time to expiry {time_to_expiry}, iv {iv}, predicted price {predicted_price}"
+            # )
+    utils.plot_3d_surface(data_points, ticker)
     return
-  
+
+
 if __name__ == "__main__":
-    main()
+    main("AAPL")
+    main("GOOG")
+    main("VOO")
