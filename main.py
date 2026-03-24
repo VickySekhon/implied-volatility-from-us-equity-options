@@ -1,42 +1,13 @@
 import yfinance as yf
+from datetime import date
 import math, os
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 from scipy.stats import norm
+from scipy.interpolate import griddata
 
 print("PICTON Investments Case Study By: Vicky Sekhon")
-
-
-"""
-goal is given prices of options, determine the implied volatility (future volatility)
-
-black scholes takes in volatility and prices an option
-
-numerical root-finding
-for an option, we can use black schloes to guess the volatility by repeatedly subbing in a random volatility until the options price is output
-- plug in vol -> output is too low, guess higher vol 
-- plug in vol -> output is too high, guess lower vol 
-
-Volatility surface is a map of fear: Z = fear (IV), X = when expiry date is X, Y = where strike price is Y
-volatility surface trends:
-- Vol skew: OTM puts are bought a lot since they have a low premium and hedge managers use them to protect against potentially huge crashes
-- the red is near-term, OTM puts, which are extremely inexpensive
-- Blue trough: ATM short-term calls have a higher premium and a lower IV because there is less uncertainty about them expiring OTM or near it
-- jagged red IV that smooths out over time shows that short-dated options are more sensitive to fear than long-dated ones
-- price of underlying = ATM = vol minimum = blue trough in this graph
-
-the more volatile an option is, the more incentivized buyers are to purchase it since it could be profitable. If it isn't, then the max a buyer loses is their option premium. 
-
-price of underlying moves more -> higher volatility -> higher option premium -> higher implied volatility
-
-IV is what the market expects moving forward (market is going to move -> higher volatility moving forward -> options are priced higher)
-
-The volatility surface is a function of strike, K, and time-to-maturity, 
-T, and is defined implicitly as: C(S, K, T) := BS (S, T, r, q, K, σ(K, T))    
- 
-C(S, K, T) denotes the current market price of a call option with time-to-maturity T and strike K
-
-"""
 
 
 class Implied_Volatility:
@@ -61,7 +32,7 @@ class Implied_Volatility:
         volatility: float,
         stock_price: float,
         strike_price: float,
-        time_to_expiry: int,
+        time_to_expiry: float,
     ) -> float:
         d1 = (
             math.log((stock_price / strike_price))
@@ -74,7 +45,7 @@ class Implied_Volatility:
         # Call price = what you expect to gain - what you pay
         call_price = stock_price * self._probability_from_normal_distribution(
             d1
-        ) - strike_price * math.e**(
+        ) - strike_price * math.e ** (
             -self.THREE_MONTH_T_BILL_RATE * time_to_expiry
         ) * self._probability_from_normal_distribution(
             d2
@@ -92,7 +63,7 @@ class Implied_Volatility:
         volatility: float,
         stock_price: float,
         strike_price: float,
-        time_to_expiry: int,
+        time_to_expiry: float,
     ) -> float:
         d1 = (
             math.log((stock_price / strike_price))
@@ -107,8 +78,8 @@ class Implied_Volatility:
         actual_price: float,
         stock_price: float,
         strike_price: float,
-        time_to_expiry: int,
-        tol=1e-6,
+        time_to_expiry: float,
+        tol=1e-10,
         max_iterations=100,
     ):
         # Begin guessing at 20% volatility
@@ -117,63 +88,212 @@ class Implied_Volatility:
             predicted_price = self.black_scholes(
                 sigma, stock_price, strike_price, time_to_expiry
             )
-            error = actual_price - predicted_price
+            error = predicted_price - actual_price
 
             if abs(error) < tol:
-                return sigma
+                return sigma, predicted_price
 
             vega = self._vega(sigma, stock_price, strike_price, time_to_expiry)
+            # print(vega)
 
             if vega < tol:
-                print(
-                    f"Vega is too small to continue, implied volatility was not found."
-                )
                 return None
 
             sigma = sigma - error / vega
+            # Clamp volatility so it is non-negative
+            sigma = max(1e-6, min(sigma, 10.0))
 
         print(f"Reached end of maximum iterations, implied volatility was not found.")
         return None
-      
-      
-IV = Implied_Volatility()
-# Generate a fake market price first
-S, K, T = 4500, 4500, 1.0
-fake_market_price = IV.black_scholes(0.2, S, K, T)
-
-# Now recover it
-iv = IV.newton_raphson(fake_market_price, S, K, T)
-print(f"Original market price: ${fake_market_price:.2f} calculated at 0.2 volatility.")
-print(f"Recovered IV: {iv}")
-
 
 
 class Options_Data:
     def __init__(self):
         self.yf_obj = yf
-        self.df = None
-        
-    def download_data(self, tickers: list[str], **kwargs) -> None:
-        df = self.yf_obj.download(tickers, **kwargs)
-        self._set_data(df)
-        
+        self.ticker_df = None
+        self.ticker_history_df = None
+        self.options = None
+
+    def load_data(self, tickers: str, expiry_date=None) -> None:
+        ticker_df = self.yf_obj.Ticker(tickers)
+
+        if expiry_date:
+            option_df = ticker_df.option_chain(date=expiry_date)
+        else:
+            option_df = ticker_df.option_chain()
+
+        option_df = ticker_df.option_chain(date=expiry_date)
+        self._set_ticker_df(ticker_df)
+        self._set_option_df(option_df)
+
+    def download_option_data(self, ticker: str) -> None:
+        assert self.options is not None, "Cannot download data, load it first."
+
         destination_dir = os.path.join(os.curdir, "data")
-        file_name = os.path.join(destination_dir, f"options_data.csv")
-        
+        file_name = os.path.join(destination_dir, f"{ticker}_option_data.csv")
+
         os.makedirs(destination_dir, exist_ok=True)
-        df.to_csv(file_name)
-        
-    def _set_data(self, df):
-        self.df = df
-        
-aapl = yf.Ticker("aapl")  
-print(aapl)
-# aapl_history = aapl.history(period="5d", interval="1h")
-# print(len(aapl_history))
+        self.options.to_csv(file_name)
 
-#data = yf.download()
+    # This returns ticker data not option data
+    def download_historical_data(self, tickers: str, **kwargs) -> None:
+        history_df = self.yf_obj.download(tickers, **kwargs)
+        self._set_ticker_history(history_df)
 
-data = Options_Data()
-data.download_data("AAPL", period="5d", interval="1h")
-print(data.df.head())
-print(data.df.tail())
+        destination_dir = os.path.join(os.curdir, "data")
+        file_name = os.path.join(destination_dir, f"ticker_data.csv")
+
+        os.makedirs(destination_dir, exist_ok=True)
+        history_df.to_csv(file_name)
+
+    def get_stock_price(self):
+        return self.ticker_df.history(period="1d")["Close"].iloc[-1]
+
+    def get_option_expiries(self):
+        return self.ticker_df.options
+
+    def get_option_chain(self, expiry: str):
+        return self.ticker_df.option_chain(expiry)
+
+    def _set_option_df(self, option_df):
+        self.options = option_df
+
+    def _set_ticker_df(self, ticker_df):
+        self.ticker_df = ticker_df
+
+    def _set_ticker_history(self, history_df):
+        self.ticker_history_df = history_df
+
+
+class Utils:
+    UPPER_STRIKE_PRICE = 1.05
+    LOWER_STRIKE_PRICE = 0.80
+
+    def __init__(self):
+        return
+
+    """
+    Filtration pipeline that removes outliers from data before generating 
+    volatility surface. The goal is to get the volatility surface to be smooth.
+    
+    1. Remove illiquid assets (done before this function)
+    2. Filter for realistic strikes that are within 20% of stock price
+    3. Filter options that are not heavily traded since they have an unreliable price 
+    4. Filter options with very low premiums
+    5. Filter options that nobody is holding
+    6. Filter options that are expiring within next 2 weeks since they will have a high implied volatility
+    """
+
+    def skip_row(
+        self,
+        row: pd.Series,
+        actual_price: float,
+        stock_price: float,
+        strike_price: float,
+        time_to_expiry: int,
+    ) -> bool:
+        lower = stock_price * self.LOWER_STRIKE_PRICE
+        upper = stock_price * self.UPPER_STRIKE_PRICE
+
+        if strike_price < lower or strike_price > upper:
+            return True
+
+        if row["volume"] < 10:
+            return True
+
+        if actual_price < 0.05:
+            return True
+
+        if row["openInterest"] < 100:
+            return True
+
+        if time_to_expiry < (14 / 365):
+            return True
+
+        return False
+
+    def get_average_price(self, ask, bid):
+        return (ask + bid) / 2
+
+    def plot_3d_surface(self, data_points, ticker):
+        strikes = np.array(data_points["strike"])
+        times = np.array(data_points["time_to_expiry"])
+        ivs = np.array(data_points["implied_volatility"])
+
+        strike_grid = np.linspace(strikes.min(), strikes.max(), 50)
+        time_grid = np.linspace(times.min(), times.max(), 50)
+        S_grid, T_grid = np.meshgrid(strike_grid, time_grid)
+
+        IV_grid = griddata((strikes, times), ivs, (S_grid, T_grid), method="linear")
+
+        fig = plt.figure(figsize=(12, 8))
+        ax = fig.add_subplot(111, projection="3d")
+        ax.plot_surface(S_grid, T_grid, IV_grid, cmap="RdYlGn_r")
+        ax.set_xlabel("Strike")
+        ax.set_ylabel("Time to Expiry")
+        ax.set_zlabel("Implied Volatility")
+        ax.set_title(f"{ticker} Implied Volatility Surface")
+        Utils().save_figure(ticker, plt)
+
+    def save_figure(self, ticker, plt):
+        destination_dir = os.path.join(os.curdir, "surfaces")
+        file_name = os.path.join(destination_dir, f"{ticker}.png")
+        os.makedirs(destination_dir, exist_ok=True)
+        plt.savefig(file_name, dpi=150, bbox_inches="tight")
+
+
+def main(ticker: str):
+    data = Options_Data()
+    IV = Implied_Volatility()
+    utils = Utils()
+
+    data.load_data(ticker)
+    stock_price = data.get_stock_price()
+
+    data_points = {"strike": [], "implied_volatility": [], "time_to_expiry": []}
+
+    for expiry_str in data.get_option_expiries():
+        expiry = date.fromisoformat(expiry_str)
+        time_to_expiry = (expiry - date.today()).days / 365
+
+        if time_to_expiry <= 0:
+            continue
+
+        option_chain = data.get_option_chain(expiry_str)
+        calls, puts = option_chain.calls, option_chain.puts
+        option_chain_data = pd.concat([calls, puts], ignore_index=True)
+        option_chain_data.fillna(0, inplace=True)
+
+        for _, row in option_chain_data.iterrows():
+            # Do not process illiquid underlying
+            if row["bid"] == 0 or row["ask"] == 0:
+                continue
+
+            actual_price = utils.get_average_price(row["bid"], row["ask"])
+            strike_price = row["strike"]
+
+            skip_row = utils.skip_row(
+                row, actual_price, stock_price, strike_price, time_to_expiry
+            )
+            if skip_row:
+                continue
+
+            iv = IV.newton_raphson(
+                actual_price, stock_price, strike_price, time_to_expiry
+            )
+
+            if iv is None:
+                continue
+
+            iv, predicted_price = iv
+            data_points["strike"].append(strike_price)
+            data_points["time_to_expiry"].append(time_to_expiry)
+            data_points["implied_volatility"].append(iv)
+    utils.plot_3d_surface(data_points, ticker)
+    return
+
+
+if __name__ == "__main__":
+    main("AAPL")
+    main("GOOG")
+    main("VOO")
