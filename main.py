@@ -11,7 +11,7 @@ print("PICTON Investments Case Study By: Vicky Sekhon")
 
 
 class Implied_Volatility:
-    THREE_MONTH_T_BILL_RATE = 0.037149999999999996
+    THREE_MONTH_T_BILL_RATE = 3.63 / 100
 
     def __init__(self):
         return
@@ -91,10 +91,9 @@ class Implied_Volatility:
             error = predicted_price - actual_price
 
             if abs(error) < tol:
-                return sigma, predicted_price
+                return sigma
 
             vega = self._vega(sigma, stock_price, strike_price, time_to_expiry)
-            # print(vega)
 
             if vega < tol:
                 return None
@@ -165,8 +164,8 @@ class Options_Data:
 
 
 class Utils:
-    UPPER_STRIKE_PRICE = 1.05
-    LOWER_STRIKE_PRICE = 0.80
+    UPPER_STRIKE_RANGE = 1.05
+    LOWER_STRIKE_RANGE = 0.8
 
     def __init__(self):
         return
@@ -175,8 +174,8 @@ class Utils:
     Filtration pipeline that removes outliers from data before generating 
     volatility surface. The goal is to get the volatility surface to be smooth.
     
-    1. Remove illiquid assets (done before this function)
-    2. Filter for realistic strikes that are within 20% of stock price
+    1. Remove illiquid assets
+    2. Filter for strikes that are within 20% of current underlying price
     3. Filter options that are not heavily traded since they have an unreliable price 
     4. Filter options with very low premiums
     5. Filter options that nobody is holding
@@ -191,8 +190,11 @@ class Utils:
         strike_price: float,
         time_to_expiry: int,
     ) -> bool:
-        lower = stock_price * self.LOWER_STRIKE_PRICE
-        upper = stock_price * self.UPPER_STRIKE_PRICE
+        lower = stock_price * self.LOWER_STRIKE_RANGE
+        upper = stock_price * self.UPPER_STRIKE_RANGE
+
+        if row["bid"] <= 0 or row["ask"] <= 0:
+            return True
 
         if strike_price < lower or strike_price > upper:
             return True
@@ -249,6 +251,9 @@ def main(ticker: str):
     data.load_data(ticker)
     stock_price = data.get_stock_price()
 
+    total_values = 0
+    total_filtered = 0
+
     data_points = {"strike": [], "implied_volatility": [], "time_to_expiry": []}
 
     for expiry_str in data.get_option_expiries():
@@ -262,12 +267,9 @@ def main(ticker: str):
         calls, puts = option_chain.calls, option_chain.puts
         option_chain_data = pd.concat([calls, puts], ignore_index=True)
         option_chain_data.fillna(0, inplace=True)
+        total_values += len(option_chain_data)
 
         for _, row in option_chain_data.iterrows():
-            # Do not process illiquid underlying
-            if row["bid"] == 0 or row["ask"] == 0:
-                continue
-
             actual_price = utils.get_average_price(row["bid"], row["ask"])
             strike_price = row["strike"]
 
@@ -275,6 +277,7 @@ def main(ticker: str):
                 row, actual_price, stock_price, strike_price, time_to_expiry
             )
             if skip_row:
+                total_filtered += 1
                 continue
 
             iv = IV.newton_raphson(
@@ -284,12 +287,14 @@ def main(ticker: str):
             if iv is None:
                 continue
 
-            iv, predicted_price = iv
             data_points["strike"].append(strike_price)
             data_points["time_to_expiry"].append(time_to_expiry)
             data_points["implied_volatility"].append(iv)
+
+    print(
+        f"Ticker {ticker} - total values before filtration {total_values}\nTotal values after filtration {total_filtered}"
+    )
     utils.plot_3d_surface(data_points, ticker)
-    return
 
 
 if __name__ == "__main__":
