@@ -114,15 +114,14 @@ class Options_Data:
         self.ticker_history_df = None
         self.options = None
 
-    def load_data(self, tickers: str, expiry_date=None) -> None:
-        ticker_df = self.yf_obj.Ticker(tickers)
+    def load_data(self, ticker: str, expiry_date=None) -> None:
+        ticker_df = self.yf_obj.Ticker(ticker)
 
         if expiry_date:
             option_df = ticker_df.option_chain(date=expiry_date)
         else:
             option_df = ticker_df.option_chain()
 
-        option_df = ticker_df.option_chain(date=expiry_date)
         self._set_ticker_df(ticker_df)
         self._set_option_df(option_df)
 
@@ -136,12 +135,12 @@ class Options_Data:
         self.options.to_csv(file_name)
 
     # This returns ticker data not option data
-    def download_historical_data(self, tickers: str, **kwargs) -> None:
-        history_df = self.yf_obj.download(tickers, **kwargs)
+    def download_historical_data(self, ticker: str, **kwargs) -> None:
+        history_df = self.yf_obj.download(ticker, **kwargs)
         self._set_ticker_history(history_df)
 
         destination_dir = os.path.join(os.curdir, "data")
-        file_name = os.path.join(destination_dir, f"ticker_data.csv")
+        file_name = os.path.join(destination_dir, f"{ticker}_historical_data.csv")
 
         os.makedirs(destination_dir, exist_ok=True)
         history_df.to_csv(file_name)
@@ -228,7 +227,7 @@ class Utils:
 
         fig = plt.figure(figsize=(12, 8))
         ax = fig.add_subplot(111, projection="3d")
-        ax.plot_surface(S_grid, T_grid, IV_grid, cmap="RdYlGn_r")
+        ax.plot_surface(S_grid, T_grid, IV_grid, cmap="viridis")
         ax.set_xlabel("Strike")
         ax.set_ylabel("Time to Expiry")
         ax.set_zlabel("Implied Volatility")
