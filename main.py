@@ -208,7 +208,7 @@ class Utils:
         if row["openInterest"] < 100:
             return True
 
-        if time_to_expiry < (14 / 365):
+        if time_to_expiry < (21 / 365):
             return True
 
         return False
@@ -300,4 +300,4 @@ def main(ticker: str):
 if __name__ == "__main__":
     main("AAPL")
     main("GOOG")
-    main("VOO")
+    main("SPY")
